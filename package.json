@@ -1,0 +1,54 @@
+{
+  "name": "local-project-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.13.1"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build-curated.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  },
+  "exports": {
+    ".": "./src/project-memory.ts",
+    "./pi-extension": "./dist/curated/pi-extension.mjs",
+    "./authoring-host": "./dist/authoring/host.mjs",
+    "./authoring-cli": "./dist/authoring/cli.mjs",
+    "./authoring-sdk-cli": "./dist/authoring/sdk-cli.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/curated/pi-extension.mjs"
+    ]
+  },
+  "files": [
+    "src/",
+    "dist/curated/",
+    "dist/authoring/",
+    "scripts/build-curated.mjs",
+    "pyproject.toml",
+    "uv.lock",
+    "docs/memory-status.md",
+    "docs/curated-plugin.md",
+    "docs/authoring-host.md",
+    "docs/automatic-capture.md",
+    "docs/task-checkpoints.md",
+    "docs/trusted-observation.md",
+    "docs/current-reader-runtime.md",
+    "docs/n05-index-json-boundary.md",
+    "docs/n05-index-unconfirmed-lifecycle.md",
+    "docs/1.md",
+    "docs/project-memory-knowledge-contract.md",
+    "docs/remaining-work.md"
+  ]
+}

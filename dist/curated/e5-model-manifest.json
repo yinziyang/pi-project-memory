@@ -1,0 +1,67 @@
+{
+  "repo": "Xenova/multilingual-e5-small",
+  "revision": "761b726dd34fb83930e26aab4e9ac3899aa1fa78",
+  "dtype": "fp32",
+  "pooling": "mean",
+  "normalization": "l2",
+  "dims": 384,
+  "maxTokens": 512,
+  "queryPrefix": "query: ",
+  "passagePrefix": "passage: ",
+  "threads": 1,
+  "upstreamModelId": "Xenova/multilingual-e5-small/fp32/mean/l2/512",
+  "files": [
+    {
+      "path": "config.json",
+      "headers": {
+        "content-length": "658",
+        "x-linked-size": "658",
+        "x-linked-etag": "\"4104f38273cc595fd9500fd243124e9f6cf383dc\""
+      },
+      "sha256": "cb99455288675345e1a4f411438d5d0adbba5fbd3a67ea4fb03c015433b996c1",
+      "bytes": 658
+    },
+    {
+      "path": "tokenizer.json",
+      "headers": {
+        "content-length": "17082730",
+        "x-linked-size": "17082730",
+        "x-linked-etag": "\"0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39\""
+      },
+      "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+      "bytes": 17082730
+    },
+    {
+      "path": "tokenizer_config.json",
+      "headers": {
+        "content-length": "443",
+        "x-linked-size": "443",
+        "x-linked-etag": "\"059214673d9d6d2ee319411e2ffec8c024b816d5\""
+      },
+      "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b",
+      "bytes": 443
+    },
+    {
+      "path": "special_tokens_map.json",
+      "headers": {
+        "content-length": "167",
+        "x-linked-size": "167",
+        "x-linked-etag": "\"e0b1d18ecd0ae4ff1d47bd297d910c0cf83e504b\""
+      },
+      "sha256": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7",
+      "bytes": 167
+    },
+    {
+      "path": "onnx/model.onnx",
+      "headers": {
+        "content-length": "470268533",
+        "x-linked-size": "470268533",
+        "x-linked-etag": "\"4aa845c27760e06e9a686b9d8b5d440eae4b6612cd09e5b522b716d3941f77ff\""
+      },
+      "sha256": "4aa845c27760e06e9a686b9d8b5d440eae4b6612cd09e5b522b716d3941f77ff",
+      "bytes": 470268533
+    }
+  ],
+  "complete": true,
+  "elapsedSeconds": 143.623
+}

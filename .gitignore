@@ -1,0 +1,13 @@
+node_modules/
+.venv/
+.project-memory*/
+.pi/
+validation/
+*.sqlite
+*.sqlite-*
+*.tgz
+*.log
+*.onnx
+.env*
+__pycache__/
+.private-*/

@@ -1,0 +1,11 @@
+# 正式本地索引使用项目独立的 Python 3.13 环境，不由插件自动安装依赖或下载模型。
+[project]
+name = "local-project-memory-index"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "chromadb==1.5.9",
+]
+
+[tool.uv]
+package = false
