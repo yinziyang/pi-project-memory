@@ -19,19 +19,19 @@ Git 安装使用仓库自带的运行时产物，用户无需手动构建。公�
 
 ## 项目如何启用
 
-打开项目根目录并在 Pi 中信任该项目。插件只检查当前目录下已发布的 `.project-memory`，不会向上搜索。
+打开项目根目录并在 Pi 中信任该项目。插件只检查当前目录下已发布的 `.project-memory`，不会向上搜索；没有发布时可从 `/memory-draft` 的人工确认开始创建。
 插件以会话 `ctx.cwd` 为项目根，不向上搜索，默认不读取会话历史，也不读取认证、模型配置或私有工作数据库。
 可信 HOME 配置显式启用后，可有界采集当前会话分支的过滤文本并归档到独占私有 writer，配置、暂停接管与预算见 [自动私有归档](docs/automatic-capture.md)。
 该 cwd 必须已由 Pi 判为可信项目，宿主公开目录及文件必须可信独占且不是符号链接。
 
-宿主需提供固定的 `.project-memory/curated.json` 和同目录 `knowledge.sqlite`，不会把旧原型 `config.json` 或任意 SQLite 库自动转换成公开知识。
+读取需要固定的 `.project-memory/curated.json` 和同目录的 `knowledge.sqlite`，首次保存会生成这两项，不会把旧原型 `config.json` 或任意 SQLite 库自动转换成公开知识。
 描述文件为至多 8192 字节的 UTF-8 JSON，只允许以下三个字段，其中 generation 必须替换为审核发布给出的 64 位小写十六进制内容代，而不是 SQLite 文件哈希。
 
 ```json
 {"version":1,"project":"合成示例项目","generation":"审核发布生成的64位小写十六进制内容代"}
 ```
 
-project 必须为非空有效 Unicode 字符串，不含 NUL，UTF-8 最多 256 字节，没有默认项目名。
+project 必须为非空有效 Unicode 字符串，不含 NUL，UTF-8 最多 256 字节。首次保存使用当前目录名，后续沿用已有发布的项目标识。
 缺少文件、非法描述、未审核库、旧库、损坏或身份／内容代不匹配时工具明确不可用，不返回伪装为空知识的成功结果，也不回退旧代。
 模型读取工具为 `memory_search` 和 `memory_read`，另注册默认不可用的 `memory_checkpoint`，仅显式启用私有采集并由可信宿主关联当前任务后才可提交五字段检查点与 revision CAS。
 检查点只是未审核的私有来源自述，SDK 可能将工具参数写入原会话，不得提交秘密，关联与恢复契约见 [任务检查点](docs/task-checkpoints.md)。
@@ -74,11 +74,14 @@ project 必须为非空有效 Unicode 字符串，不含 NUL，UTF-8 最多 256 
 证据应说明验证场景、操作、预期和实际结果，必要时可保留不依赖文件位置的短代码示例。
 插件会拒绝草稿中常见的源码定位写法，其余内容仍需人工核对。
 使用旧知识时，若需定位实现，应重新检查当前工作区，核实冲突后更新同一条知识。
-确认的条目写入已绑定且已初始化的项目私有审核库，不自动公开发布。
-私库绑定沿用 `~/.local-project-memory-capture/config.json` 的项目条目，可以保持 `enabled: false`，无需归档聊天。
-首次建立私库或自动归档仍持有同一库时，分别由可信宿主初始化或先用 `/memory-capture pause` 停止归档，不会擅自创建其他库或接管。
-新增使用 `expectedRevision: 0`，更新需使用现有知识 ID 和确认过的私库修订号；版本冲突不会覆盖，结果未确认时先检查私库再决定是否重做。
-保存不替换 `.project-memory`，需要公开检索时再走 [可信写宿主](docs/authoring-host.md) 的发布流程。
+确认后，插件将选中的条目整批保存到当前项目的 `.project-memory/knowledge.sqlite`，并从同一份 SQLite 生成 `.project-memory/md/`。
+首次保存会创建发布，不需要私库绑定，不开启聊天归档，也不提交或推送 Git。
+新增使用 `expectedRevision: 0`，更新沿用已有知识 ID 和当前修订号，未选中的知识保留原样。
+发布代或条目修订发生变化时拒绝覆盖，结果未确认时先核对实际发布，不重复提交或删除暂存文件。
+直接保存限可信的 Linux 本地项目目录，目录须由当前用户所有，不得允许同组或其他用户写入。
+同一个项目的 Pi 窗口需安装新版并退出重开，才能参与协作停读，旧版本或外部非协作读取程序须先关闭。
+有其他协作窗口正在读取时，先在这些窗口执行 `/memory-refresh pause`，再重新提炼并确认保存。
+私有归档与 [独立可信写宿主](docs/authoring-host.md) 是另外的工作流，不需要为直接保存配置。
 
 无需手动开启或登记验证提醒。
 可信 Pi 验证扩展可在一轮实际核验完成后发送 `local-project-memory.verification-receipt.v1`，字段为当前 `cwd`、`sessionId` 和稳定证据的 64 位小写十六进制 `digest`。
@@ -117,7 +120,7 @@ confirmed-close 但关库／退出存在异常时仍记录诊断，不伪报活�
 
 | 命令 | 作用 |
 |---|---|
-| `/memory-draft` 或单独输入「开始提炼」 | 使用当前模型起草，让你选条目、预览并确认私库写入，不自动发布。 |
+| `/memory-draft` 或单独输入「开始提炼」 | 使用当前模型起草，选条目、预览并经人工确认后保存到项目的 `.project-memory/`。 |
 | `/memory-status` | 查看项目发布、私库和本机语义索引状态。 |
 | `/memory-init` | 安装或复用本机的 E5 和 Chroma。 |
 | `/memory-refresh`、`/memory-refresh pause`、`/memory-refresh index` | 分别重载发布、停读和显式修复向量索引。 |

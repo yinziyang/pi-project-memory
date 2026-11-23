@@ -1,9 +1,11 @@
 """Linux 写宿主与只读观察子树所有者，继承当前组且只终止自己持有的子进程，不创建 detached 组。"""
 import ctypes
+import fcntl
 import os
 from pathlib import Path
 import select
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -24,11 +26,36 @@ def report(code):
         pass  # 退出码仍保留失败，不能为了诊断阻塞实际回收。
 
 
+def lock_project(path):
+    """锁定实际项目目录 inode，不用可被替换的锁文件。"""
+    if not os.path.isabs(path) or os.path.realpath(path) != path:
+        raise ValueError('PROJECT_DRAFT_PATH')
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        item = os.fstat(fd)
+        if item.st_uid != os.getuid() or item.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError('PROJECT_DRAFT_PATH')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def project_rejection(code):
+    """在尚未启动写入进程时返回安全拒绝，不等待不消费响应的父端。"""
+    try:
+        if select.select([], [1], [], 0)[1]:
+            os.write(1, ('{"ok":false,"code":"' + code + '"}\n').encode())
+    except OSError:
+        pass  # 父端拿不到拒绝帧时仍需以退出码识别失败。
+
+
 def main():
     """正常停止预算为 3 秒，超时转为已报告的保留监管状态，不退出并把未知后代遗弃给 init。"""
     started = time.monotonic()
     mode = sys.argv[2] if len(sys.argv) > 2 else None
-    allowed = {'http': 7, 'sdk': 7, 'archive': 7, 'observe': 7, 'index-install': 5, 'manual-draft': 6}
+    allowed = {'http': 7, 'sdk': 7, 'archive': 7, 'observe': 7, 'index-install': 5, 'manual-draft': 6, 'project-draft': 4}
     if mode not in allowed or len(sys.argv) != allowed[mode]:
         report('HOST_OWNER_ARGUMENTS')
         report('HOST_OWNER_REAP_CONFIRMED')
@@ -79,6 +106,7 @@ def main():
     for number in [signal.SIGTERM, signal.SIGINT]:
         signal.signal(number, request_stop)
     child = None
+    project_fd = None
     handles = {}
     shutdown_at = None
     forced = False
@@ -92,13 +120,32 @@ def main():
             'observe': Path(__file__).parent.parent / 'curated' / 'trusted-observation-worker.mjs',
             'index-install': Path(__file__).parent.parent / 'curated' / 'index-install.py',
             'manual-draft': Path(__file__).with_name('manual-draft-cli.mjs'),
+            'project-draft': Path(__file__).with_name('project-draft-cli.mjs'),
         }
-        child = subprocess.Popen([sys.argv[1], str(entries[sys.argv[2]]), *sys.argv[3:]])
+        args = [sys.argv[1], str(entries[mode]), *sys.argv[3:]]
+        if mode == 'project-draft':
+            try:
+                project_fd = lock_project(sys.argv[3])
+            except BlockingIOError:
+                project_rejection('PROJECT_DRAFT_BUSY')
+                report('HOST_OWNER_REAP_CONFIRMED')
+                return 1
+            except (OSError, ValueError):
+                project_rejection('PROJECT_DRAFT_UNAVAILABLE')
+                report('HOST_OWNER_REAP_CONFIRMED')
+                return 1
+            if stop_requested:
+                project_rejection('PROJECT_DRAFT_FAILED')
+                report('HOST_OWNER_REAP_CONFIRMED')
+                return 1
+            child = subprocess.Popen([*args, str(project_fd)], pass_fds=(project_fd,))
+        else:
+            child = subprocess.Popen(args)
         handles[child.pid] = open_pidfd(child.pid)
         while True:
             now = time.monotonic()
             status = child.poll()
-            if stop_requested or now - started >= ({'index-install': 900, 'manual-draft': 15}.get(mode, 3600)) or status is not None:
+            if stop_requested or now - started >= ({'index-install': 900, 'manual-draft': 15, 'project-draft': 30}.get(mode, 3600)) or status is not None:
                 if shutdown_at is None:
                     shutdown_at = now
                     if status is not None:
@@ -179,6 +226,9 @@ def main():
     finally:
         for handle in handles.values():
             os.close(handle)
+        # 只有实际回收子树后才释放目录锁，绝不在报告未确认时提前解锁。
+        if project_fd is not None:
+            os.close(project_fd)
 
 
 if __name__ == '__main__':

@@ -5,58 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 
-const MAX_REQUEST_BYTES = 1024 * 1024;
+import { readDraftFrame, text, validDraft } from './draft-wire.mjs';
 const PRIVATE_FILES = new Set([
   'private.sqlite', 'private.sqlite-wal', 'private.sqlite-shm',
   'private.sqlite.owner', 'private.sqlite.owner-journal',
 ]);
 
 class DraftError extends Error {}
-
-function exactFields(value, fields) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    && Object.keys(value).length === fields.length
-    && fields.every(field => Object.hasOwn(value, field));
-}
-
-function text(value) {
-  return typeof value === 'string' && value.isWellFormed() && !value.includes('\0') && Boolean(value.trim());
-}
-
-function validDraft(draft, categories) {
-  const evidenceFields = ['implementation', 'object', 'method', 'coverage', 'source', 'publicSummary'];
-  const resultFields = ['observed', 'expected', 'comparison'];
-  return exactFields(draft, ['knowledgeId', 'expectedRevision', 'category', 'scope', 'source', 'title', 'narrative', 'facts', 'evidence'])
-    && typeof draft.knowledgeId === 'string' && /^k-[a-z0-9][a-z0-9-]{0,79}$/.test(draft.knowledgeId)
-    && Number.isSafeInteger(draft.expectedRevision) && draft.expectedRevision >= 0
-    && categories.includes(draft.category)
-    && [draft.scope, draft.source, draft.title, draft.narrative].every(text)
-    && Array.isArray(draft.facts) && draft.facts.every(text)
-    && Array.isArray(draft.evidence) && draft.evidence.length > 0
-    && draft.evidence.every(item => exactFields(item, [...evidenceFields, 'result'])
-      && evidenceFields.every(field => text(item[field]))
-      && exactFields(item.result, resultFields) && resultFields.every(field => text(item.result[field])));
-}
-
-async function readRequest() {
-  const chunks = [];
-  let size = 0;
-  let lineEnded = false;
-  try {
-    for await (const chunk of process.stdin) {
-      size += chunk.length;
-      const end = chunk.indexOf(10);
-      if (size > MAX_REQUEST_BYTES || lineEnded || (end !== -1 && end !== chunk.length - 1)) {
-        throw new DraftError('MANUAL_DRAFT_INPUT');
-      }
-      lineEnded = end !== -1;
-      chunks.push(chunk);
-    }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks, size)));
-  } catch {
-    throw new DraftError('MANUAL_DRAFT_INPUT');
-  }
-}
 
 // 不调用会创建目录和 owner 的 privateDirectory，路径与两份现存文件必须在启动 SQLite 之前确认。
 // 可信父进程负责保证祖先目录不会被同 UID 进程恶意更换，与现有 authoring 宿主采用相同的所有权边界。
@@ -123,7 +78,9 @@ async function run() {
   const inputDeadline = setTimeout(() => process.stdin.destroy(new DraftError('MANUAL_DRAFT_INPUT')), 4000);
   let draft;
   try {
-    draft = await readRequest();
+    draft = await readDraftFrame();
+  } catch {
+    throw new DraftError('MANUAL_DRAFT_INPUT');
   } finally {
     clearTimeout(inputDeadline);
   }

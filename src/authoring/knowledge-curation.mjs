@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { openSync, closeSync, rmSync, lstatSync } from "node:fs";
 import { SessionStore } from "./vendor/session-store.mjs";
 import { SessionSearch } from "../curated/vendor/session-search.mjs";
+import { readCurrentCuration } from "../curated/current-curation.mjs";
 import { readKnowledgeRows, validateKnowledgeProject } from "../curated/sqlite-knowledge.mjs";
 import { CATEGORIES } from "../curated/knowledge-categories.mjs";
 export { CATEGORIES } from "../curated/knowledge-categories.mjs";
@@ -286,6 +287,66 @@ export function publishCurrentCuration(db, { targetPath, project }, {
     }
     return rows2.sort((a, b) => a.projection.knowledgeId < b.projection.knowledgeId ? -1 : 1);
   })();
+  return writePublicProjection(rows, { targetPath, project }, { createTarget, closeTarget, removeTarget });
+}
+
+/** 从已核验的当前快照为人工确认的草稿构建新公开库，不修改或关闭借用的源连接。
+ * 调用方必须绑定源代并独占暂存目录，发布前仍须协调读取及核对当前代。
+ * 批次中有未改变公开内容的草稿时，整批拒绝且不创建目标文件。
+ */
+export function stageReviewedDrafts(source, { project, generation, targetPath, drafts, reviewedAt }) {
+  validateKnowledgeProject(project);
+  time(reviewedAt);
+  if (!Array.isArray(drafts) || !drafts.length || drafts.length > 5) throw new Error("CURATION_DRAFTS");
+  const current = source ? source.transaction(() => readCurrentCuration(source, { project }))() : { generation: null, rows: [] };
+  if (current.generation !== generation) throw new Error("CURATION_CONFLICT");
+  const rows = new Map(current.rows.map(row => [row.projection.knowledgeId, row]));
+  const seen = new Set();
+  let unchanged = false;
+  for (const draft of drafts) {
+    id(draft.knowledgeId);
+    revision(draft.expectedRevision);
+    if (seen.has(draft.knowledgeId) || (rows.get(draft.knowledgeId)?.revision ?? 0) !== draft.expectedRevision || draft.expectedRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("CURATION_CONFLICT");
+    }
+    seen.add(draft.knowledgeId);
+    if (!Array.isArray(draft.facts)) throw new Error("CURATION_DRAFTS");
+    const p = { knowledgeId: draft.knowledgeId, category: draft.category, scope: draft.scope, source: draft.source,
+      project, type: "discovery", title: text(draft.title), subtitle: null, narrative: text(draft.narrative),
+      facts: JSON.stringify(draft.facts.map(text)), concepts: "[]", created_at: reviewedAt, created_at_epoch: Date.parse(reviewedAt) };
+    validateReview({ approvalId: "staged-draft", reviewer: "trusted-manual-draft", reviewedAt, projection: p, evidence: draft.evidence }, p);
+    const evidence = draft.evidence.map(item => [
+      item.publicSummary, `验证：${item.implementation}`, `对象：${item.object}`, `方法：${item.method}`,
+      `范围：${item.coverage}`, `来源：${item.source}`, `预期：${item.result.expected}`,
+      `实际结果：${item.result.observed}`, `比较：${item.result.comparison}`,
+    ].join("\n"));
+    const previous = rows.get(p.knowledgeId);
+    if (previous && samePublicDraft(previous, p, evidence)) unchanged = true;
+    rows.set(p.knowledgeId, { revision: draft.expectedRevision + 1, projection: p, evidence });
+  }
+  if (unchanged) throw new Error("CURATION_UNCHANGED");
+  return writePublicProjection([...rows.values()].sort((a, b) => a.projection.knowledgeId < b.projection.knowledgeId ? -1 : 1), { project, targetPath });
+}
+
+function samePublicDraft(previous, projection, evidence) {
+  return Object.keys(projection).every(key => {
+    if (key === "created_at" || key === "created_at_epoch") return true;
+    if (key === "facts" || key === "concepts") {
+      return digest(JSON.parse(previous.projection[key])) === digest(JSON.parse(projection[key]));
+    }
+    return previous.projection[key] === projection[key];
+  }) && digest(previous.evidence) === digest(evidence);
+}
+
+/** 为可信发布宿主写入已审批的当前投影，不负责交换目录或协调读取。
+ * rows 必须是调用方在同一事务内核验的全量公开条目，并按稳定知识 ID 升序排列。
+ * 调用方必须独占暂存目录，且仅能将成功关闭的数据库用于发布。
+ */
+function writePublicProjection(rows, { targetPath, project }, {
+  createTarget = (path) => new SessionStore(new Database(path), { syncOpsEnabled: false }),
+  closeTarget = (store) => store.close(),
+  removeTarget = (path) => rmSync(path, { force: true }),
+} = {}) {
   const snapshot = digest({ version: 1, project, rows });
   let target, created = false;
   let closeAttempted = false;

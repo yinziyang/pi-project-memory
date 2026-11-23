@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 import { readCaptureConfig } from './capture-config.mjs';
 import { readIndexConfig, readIndexInstallation } from './index-config.mjs';
 import { readTrustedDescriptor } from './trusted-descriptor.mjs';
@@ -53,12 +53,12 @@ async function command(request) {
   try {
     if (request.command === 'capture-config') return await readCaptureConfig(cwd);
     if (request.command === 'draft-binding') {
-      const binding = await readCaptureConfig(cwd, { includeDisabled: true });
-      if (!binding) return null;
       const checkout = await observeCheckoutInWorker(cwd, active.signal);
-      const publication = await readTrustedDescriptor(cwd, { requireDatabase: false, allowPaused: true });
-      if (!checkout.stable || (publication && publication.project !== binding.project)) throw new Error('MEMORY_DRAFT_STALE');
-      return { binding, checkout, generation: publication?.generation ?? null };
+      const publication = await readTrustedDescriptor(cwd);
+      if (!checkout.stable) throw new Error('MEMORY_DRAFT_STALE');
+      const project = publication?.project ?? basename(checkout.canonicalCwd);
+      if (!project || !project.isWellFormed() || !project.trim() || Buffer.byteLength(project) > 256 || /[\x00-\x1f\x7f]/u.test(project)) throw new Error('MEMORY_DRAFT_UNAVAILABLE');
+      return { cwd: checkout.canonicalCwd, project, checkout, generation: publication?.generation ?? null };
     }
     if (request.command === 'index-config') return await readIndexConfig(cwd, { publication: await readTrustedDescriptor(cwd) });
     if (request.command === 'index-installation') return await readIndexInstallation();

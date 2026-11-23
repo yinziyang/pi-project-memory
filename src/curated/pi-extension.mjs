@@ -365,7 +365,11 @@ export default function curatedMemoryExtension(pi) {
       if (!state.enabled || state.paused) return false;
       return (await observation(ctx.cwd, 'captureConfig')) !== null;
     } });
-  installDraftCommand(pi, { readBinding: ctx => observation(ctx.cwd, 'draftBinding') });
+  installDraftCommand(pi, {
+    readBinding: ctx => observation(ctx.cwd, 'draftBinding'),
+    pause: ctx => lifecycle(ctx, false, true, 'pause'),
+    refresh: async ctx => { await lifecycle(ctx); queueStatus(ctx); },
+  });
   pi.on('session_start', async (event, ctx) => {
     latestContext = ctx;
     try { await Promise.all([capture.start(ctx), lifecycle(ctx, false, false, event.reason)]); }

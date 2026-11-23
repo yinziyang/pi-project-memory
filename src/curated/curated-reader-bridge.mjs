@@ -78,7 +78,7 @@ export function createCuratedReaderBridge({ project, bunPath, workerPath = fileU
     // 事件回调立即接管拒绝，操作所有者仍会再次等待并传播回收失败。
     void stop().catch((failure) => { diagnostic ??= failure; });
   }
-  function launch() {
+  function launch(lockFd) {
     ready = false;
     stopping = false;
     diagnostic = undefined;
@@ -90,7 +90,16 @@ export function createCuratedReaderBridge({ project, bunPath, workerPath = fileU
     const ownIncarnation = incarnation;
     closePromise = new Promise((resolve) => { closeResolve = resolve; });
     try {
-      child = spawn(bunPath, [workerPath, String(incarnation), ...(allowDense ? ['dense-v1'] : [])], { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
+      const args = [workerPath, String(incarnation), ...(allowDense ? ['dense-v1'] : [])];
+      const stdio = ['pipe', 'pipe', 'pipe'];
+      let command = bunPath;
+      if (lockFd !== undefined) {
+        command = 'python3';
+        args.unshift('-I', '-S', fileURLToPath(new URL('./reader-lock-exec.py', import.meta.url)), bunPath);
+        stdio.push(lockFd);
+      }
+      // 启动器取得锁后原地 exec，PID 不变，已有 TERM/KILL 与 close 确认始终针对直接子进程。
+      child = spawn(command, args, { stdio, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
     } catch (error) {
       // spawn 同步失败时没有取得新进程，不能留下虚假的未确认资源阻止后续显式安装。
       didClose = true;
@@ -104,7 +113,10 @@ export function createCuratedReaderBridge({ project, bunPath, workerPath = fileU
     child.once('exit', (code, signal) => {
       diagnostics.exit = { code, signal };
       pause();
-      pending?.reject(fail('WORKER_EXITED'));
+      if (lockFd !== undefined && !ready && (code === 73 || code === 74)) {
+        diagnostic ??= fail(code === 73 ? 'PUBLIC_LOCK_BUSY' : 'PUBLIC_LOCK_START_FAILED');
+        pending?.reject(diagnostic);
+      } else pending?.reject(fail('WORKER_EXITED'));
     });
     child.once('close', (code, signal) => {
       diagnostics.exit = { code, signal };
@@ -128,7 +140,8 @@ export function createCuratedReaderBridge({ project, bunPath, workerPath = fileU
     });
     child.stdout.on('end', () => {
       if (bytes.length) protocolFailure(fail('OUTPUT_TRUNCATED_FRAME'));
-      else if (!didClose && !stopping) protocolFailure(fail('OUTPUT_CLOSED'));
+      // 带锁启动在 ready 前静默退出时由 exit 判断锁冲突，未退出的断流仍由启动期限回收。
+      else if (!didClose && !stopping && (ready || lockFd === undefined)) protocolFailure(fail('OUTPUT_CLOSED'));
     });
     child.stdout.on('data', (chunk) => {
       try {
@@ -234,14 +247,16 @@ export function createCuratedReaderBridge({ project, bunPath, workerPath = fileU
     signal?.throwIfAborted();
   }
   return {
-    async install({ publicPath, generation, signal }) {
+    /** lockFd 为可选的借用目录描述符，Linux 启动器仅在取得共享锁后启动 Bun，未提供时维持 standalone 行为。 */
+    async install({ publicPath, generation, signal, lockFd }) {
       signal?.throwIfAborted();
       if (closed || active || pending || stopTask || !didClose) throw fail('TRANSITION_REQUIRED');
       if (typeof publicPath !== 'string' || !publicPath.isWellFormed() || !publicPath || publicPath.includes('\0') ||
-          typeof generation !== 'string' || !generation.isWellFormed() || !generation) throw fail('INVALID_BRIDGE_OPTIONS');
+          typeof generation !== 'string' || !generation.isWellFormed() || !generation ||
+          (lockFd !== undefined && (!Number.isInteger(lockFd) || lockFd < 3))) throw fail('INVALID_BRIDGE_OPTIONS');
       const deadline = Date.now() + startupMs;
       const stamp = epoch;
-      launch();
+      launch(lockFd);
       await exchange('ready', {}, signal, deadline);
       await exchange('install', { publicPath, generation, project }, signal, deadline);
       if (stamp !== epoch) throw fail('STALE_REFERENCE: 请重新搜索');

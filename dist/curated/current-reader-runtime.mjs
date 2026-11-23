@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, realpath, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createCuratedReaderBridge } from './curated-reader-bridge.mjs';
 import { createCurrentIndexOwner } from './index/current-index-owner.mjs';
@@ -39,7 +40,9 @@ async function namespace(config, binding, signal, ownedFiles) {
 
 /** 创建 Node 所有的当前 reader，index 与 Bun bridge 都由本对象创建并负责实际关闭，配置为 null 时保持纯 SQLite 行为。
  * indexConfig 只能来自 readIndexConfig，getBinding({signal}) 必须合作取消并返回宿主当前 sourceBinding/checkoutToken/ownerEpoch，不能从公开 descriptor 取得授权。
- * install 只等待旧有 Bun 启动与只读安装，index 的整个后台初始化（含 namespace）独立使用 180000 毫秒预算，toolTimeoutMs 仅显式启用 index 时为 180000，否则为 15000。
+ * Linux 本地宿主必须传入规范 cwd，install 通过 PATH 上的 python3 在打开的目录 inode 上取得共享锁。
+ * 既有 Pi 实例必须全部升级并重启才会参与协作，外部非协作读者不受此锁约束。
+ * install 等待锁、Bun 启动与只读安装，index 的整个后台初始化（含 namespace）独立使用 180000 毫秒预算，toolTimeoutMs 仅显式启用 index 时为 180000，否则为 15000。
  * transition 先撤销绑定并取消全部自有任务，再实际关 index 与 bridge，未确认回收会保留每项诊断且阻止重新 install。
  * 公开操作取消后最多等待 3500 毫秒，transition/close 固定 5000 毫秒，未 settle 时返回 UNCONFIRMED 并保留真实任务、fd 与 owner，不能据此安装或发布。
  * close 为终态且允许重复尝试收尾，不关闭借用回调或借用模型，调用方必须等待 close 成功且 retainedResources 为空后才能释放配置与发布目录。
@@ -58,6 +61,7 @@ export function createCurrentReaderRuntime({ project, cwd, bunPath = 'bun', inde
   let closeTask;
   let busy = false;
   let recoveryRequired = false;
+  let directoryLock;
   const tasks = new Set();
   const cleanupErrors = [];
   const retainedInputs = new Map();
@@ -66,8 +70,15 @@ export function createCurrentReaderRuntime({ project, cwd, bunPath = 'bun', inde
     ...(index?.diagnostics() ?? []).map(resource => ({ ...resource, owner: 'current-index-owner' })),
     ...(bridge.diagnostics.retainedResources ?? []),
     ...[...new Set([...retainedInputs.keys(), ...(recoveryRequired ? ownedFiles : [])])].map(() => ({ owner: 'current-reader-cache-marker', state: 'close-unconfirmed' })),
+    ...(recoveryRequired && directoryLock ? [{ owner: 'current-reader-directory-lock', state: 'close-unconfirmed' }] : []),
     ...(recoveryRequired ? [{ owner: 'current-reader-runtime', state: tasks.size ? 'operation-unsettled' : 'retry-required', count: tasks.size }] : []),
   ];
+  // Bun 和宿主共享打开文件描述，不能主动解锁；必须确认 bridge、索引和在途任务均已回收才关闭宿主副本。
+  async function releaseDirectoryLock() {
+    if (!directoryLock) return;
+    await directoryLock.close();
+    directoryLock = undefined;
+  }
   function tracked(task) {
     tasks.add(task);
     task.then(() => tasks.delete(task), () => tasks.delete(task));
@@ -168,6 +179,7 @@ export function createCurrentReaderRuntime({ project, cwd, bunPath = 'bun', inde
         cleanupErrors.push(...failures);
         throw new AggregateError(failures, 'CURRENT_READER_CLOSE_UNCONFIRMED');
       }
+      await releaseDirectoryLock();
       index = undefined;
       indexState = indexConfig ? 'INDEX_MISSING' : 'OFF';
     })().finally(() => { stopping = undefined; });
@@ -197,10 +209,17 @@ export function createCurrentReaderRuntime({ project, cwd, bunPath = 'bun', inde
       // 先登记启动任务，transition 才能取消并等待仍在授权或安装阶段的工作，不能让晚 install 越过新 epoch。
       const task = tracked(Promise.resolve().then(async () => {
         combined.throwIfAborted();
+        if (process.platform !== 'linux' || typeof cwd !== 'string' || !cwd.isWellFormed() || !cwd || cwd.includes('\0') || resolve(cwd) !== cwd) throw new Error('PUBLIC_LOCK_CWD_INVALID');
+        directoryLock = await open(cwd, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        const canonical = await realpath(cwd);
+        const opened = await directoryLock.stat({ bigint: true });
+        const current = await lstat(cwd, { bigint: true });
+        if (canonical !== cwd || !current.isDirectory() || opened.ino !== current.ino || opened.dev !== current.dev) throw new Error('PUBLIC_LOCK_CWD_INVALID');
+        combined.throwIfAborted();
         const permission = indexConfig ? await authorization(combined) : {};
         combined.throwIfAborted();
         if (stamp !== epoch || closed) throw new Error('INDEX_BINDING_STALE');
-        await bridge.install({ publicPath, generation, signal: combined });
+        await bridge.install({ publicPath, generation, signal: combined, lockFd: directoryLock.fd });
         const publicStatus = await bridge.status({ signal: combined });
         if (publicStatus.project !== project || publicStatus.generation !== generation || !Number.isSafeInteger(publicStatus.totalRows) || publicStatus.totalRows < 0 || Object.keys(publicStatus).length !== 3) throw new Error('PUBLIC_STATUS_INVALID');
         combined.throwIfAborted();
@@ -221,8 +240,11 @@ export function createCurrentReaderRuntime({ project, cwd, bunPath = 'bun', inde
         }
       }).catch(async error => {
         controller.abort(error);
-        try { await bridge.transition(); }
-        catch (cleanupError) {
+        try {
+          await bridge.transition();
+          await releaseDirectoryLock();
+        } catch (cleanupError) {
+          recoveryRequired = true;
           const failure = new AggregateError([error, cleanupError], 'CURRENT_READER_INSTALL_CLEANUP_FAILED');
           Object.assign(failure, { originalError: error, cleanupErrors: [cleanupError], retainedResources: retained() });
           throw failure;
