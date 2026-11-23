@@ -66,7 +66,8 @@ adapter 在请求 finally 中撤销，普通 search 不会沿用上一个 indexe
 
 ## 用户级初始化与显式 HOME 配置
 
-在可信项目中执行 `/memory-init`，使用已有 Python 3.13 与 `uv` 将固定 E5 模型和锁定的 Chroma 环境安装到 `~/.local/share/local-project-memory/`。
+在可信项目中执行 `/memory-init`，使用已有 Python 3.13 与 `uv` 将固定 E5 模型和锁定的 Chroma 环境安装到 `~/.pi-project-memory/`。
+安装与状态读取使用同一专用根目录，要求当前用户所有、权限 `0700` 且不是符号链接，不读取或迁移旧安装目录。
 安装成功回执让本用户打开的可信有效发布项目默认使用向量索引，不扫描其他项目，不在加载插件时自动安装或下载。
 各项目共享模型和 Python 环境，缓存根按规范 checkout 路径与项目标识分开。
 `/memory-status` 的安装文件状态不代表当前索引已验证，更不代表每次检索成功。缺少可用资产时可走 SQLite 降级，匹配索引损坏仍按前述规则报错。

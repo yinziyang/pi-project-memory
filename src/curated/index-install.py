@@ -368,7 +368,8 @@ def install(home_arg: str, package_arg: str) -> None:
     home = home_path.resolve(strict=True)
     local_stat(home, directory=True)
     package = package_path.resolve(strict=True)
-    root = make_dir(make_dir(make_dir(home / '.local') / 'share') / 'local-project-memory')
+    # 专用目录直接位于已校验的 HOME 下，不读取或接管共享的 .local。
+    root = make_dir(home / '.pi-project-memory')
     if stat.S_IMODE(local_stat(root, directory=True).st_mode) != 0o700:
         raise InstallError('UNSAFE_PATH')
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

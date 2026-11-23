@@ -20,7 +20,7 @@ async function canonicalCandidate(path) {
 
 // 安装回执只授权使用固定用户目录，不接受项目提供的可执行文件、模型或缓存路径。
 async function userInstallation(home) {
-  const root = join(home, '.local', 'share', 'local-project-memory');
+  const root = join(home, '.pi-project-memory');
   if (await canonicalCandidate(root) !== root) throw new Error('INDEX_CONFIG_UNSAFE');
   try {
     const info = await lstat(root);
