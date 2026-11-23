@@ -3,18 +3,22 @@ import { fileURLToPath } from "node:url";
 import { CATEGORIES } from "./knowledge-curation.mjs";
 import { readCurrentCuration } from "../curated/current-curation.mjs";
 import { validateKnowledgeProject } from "../curated/sqlite-knowledge.mjs";
-// 动态围栏保留原文（含 BOM），不让标题、HTML 或链接成为可执行 Markdown 语法。
-function literal(value) {
-  const s = value === null ? "（SQL NULL）" : String(value);
-  let longest = 2;
-  for (const match of s.matchAll(/`+/g)) longest = Math.max(longest, match[0].length);
-  const fence = "`".repeat(longest + 1);
-  return `${fence}text
-${s}
-${fence}
-`;
+// 内容按纯文本渲染，不允许知识正文注入 Markdown 结构、HTML 或主动链接。
+const label = value => value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~\r\n]/g, character => `&#${character.codePointAt(0)};`);
+const prose = value => value.split(/\r\n?|\n/).map(line => label(line).replace(/^[ \t]+/, spaces => [...spaces].map(character => `&#${character.codePointAt(0)};`).join(""))).join("  \n");
+
+function renderKnowledge(row) {
+  const p = row.projection;
+  const facts = JSON.parse(p.facts ?? "[]");
+  const lines = [`# ${label(p.title?.trim() || p.knowledgeId)}`, ""];
+  if (p.subtitle?.trim()) lines.push(prose(p.subtitle), "");
+  if (p.narrative?.trim()) lines.push(prose(p.narrative), "");
+  if (facts.length) lines.push("## 要点", "", ...facts.map(value => `- ${prose(value).replaceAll("\n", "\n  ")}`), "");
+  lines.push("## 适用范围", "", prose(p.scope), "", "## 如何核对", "");
+  for (const evidence of row.evidence) lines.push(prose(evidence), "");
+  lines.push(`来源：${label(p.source)}  `, `修订：${row.revision}（${label(p.knowledgeId)}）`, "");
+  return lines.join("\n");
 }
-const label = (s) => String(s).replace(/[&<>"'\[\]\\`*_!()\r\n]/g, (c) => `&#${c.codePointAt(0)};`);
 /** 从发布时绑定的同一 SQLite 快照生成只读视图，不接受旧发布库或 verified 标志。
  * 调用方独占源路径、可信父目录及连接；本函数持有 BEGIN IMMEDIATE 至同步子进程退出，阻止协作 SQLite writer，不防御同 UID 恶意替换。
  * 必须在 run.py 或等效有界进程组隔离中调用，取消由外层终止并回收整个进程组，不得在共享服务事件循环中调用。
@@ -41,10 +45,9 @@ export function exportMarkdown(db, { project, parentPath, exclusiveSourcePath = 
     let home = `<!-- project-memory-export:${identity} -->
 # 项目知识阅读视图
 
-${literal(project)}
-快照：${snapshot}
+项目：${label(project)}
 
-仅包含宿主登记及精选发布的当前知识，不是自动事实验证或可编辑权威库。
+这是从 SQLite 生成的阅读视图，请勿直接编辑。
 `;
     for (const category of CATEGORIES) {
       home += `
@@ -55,24 +58,7 @@ ${literal(project)}
         const p = row.projection, path = `${category}/${p.knowledgeId}.md`;
         home += `- [${label(p.title ?? p.knowledgeId)}](${encodeURI(path)})
 `;
-        let body = `# 知识正文
-
-## 当前修订（revision）
-
-${literal(row.revision)}
-`;
-        const headings = { knowledgeId: "稳定标识", category: "分类", scope: "适用范围", source: "来源", project: "项目", type: "知识类型", title: "标题", subtitle: "副标题", narrative: "正文", facts: "事实", concepts: "概念", created_at: "原始创建时间", created_at_epoch: "原始创建时间戳" };
-        for (const [key, value] of Object.entries(p)) body += `## ${headings[key]}（${key}）
-
-${literal(value)}
-`;
-        body += `## 公开实施证据
-
-${row.evidence.map(literal).join("\n")}
-## 快照
-
-${literal(snapshot)}`;
-        files[path] = body;
+        files[path] = renderKnowledge(row);
       }
     }
     files["README.md"] = home;
