@@ -9,6 +9,8 @@ const draftPrompt = [
   '没有可复用且证据充分的内容时，直接说明“本次没有值得提炼的内容”及简短原因。',
   '如果当前项目能查到已发布知识，先查同主题条目。同主题更新沿用已有知识 ID，只有已证实不再适用才建议撤下。',
   '每条展示标题、建议操作、旧结论与变更（如适用）、分类、结论、适用范围、独立证据、必要公开安全代码和拟发布路径 .project-memory/md/<分类>/<knowledgeId>.md。不复制聊天原文、凭据或私有路径。',
+  '正文、事实、来源、证据和代码示例均不得包含源码或测试文件名、路径、行号；不要改用带这些定位信息的链接。拟发布路径仅供确认目标，不写入知识正文。',
+  '用验证场景、操作、预期和实际结果说明证据。必要时使用不依赖文件位置的独立短代码示例。',
   '如有能提交的新增或更新，在最终回复附上唯一的 ```memory-draft 代码块，内容为纯 JSON 数组（最多五条，16 KiB）。不要在此块中放失效建议或不能核验的条目。',
   '每条 JSON 须有 knowledgeId、expectedRevision、category、scope、source、title、narrative、facts、evidence。新增修订填 0，更新用可核验的旧修订号，未知就不要放入块。代码可写入 narrative。evidence 为数组，每项包含 implementation、object、method、coverage、source、publicSummary 与 result:{observed,expected,comparison}。',
   '分类仅选项目概况、领域规则、代码导航、开发操作、设计决策、排障经验、项目约定。最后明确说明草稿未写入，由 Pi 展示并由用户确认。',
@@ -36,7 +38,24 @@ function draftsFrom(text) {
   const parsed = parseDocument(raw, { uniqueKeys: true, schema: 'json', strict: true });
   if (parsed.errors.length || parsed.warnings.length || !Array.isArray(drafts) || drafts.length > 5 || !drafts.every(validDraft) ||
       new Set(drafts.map(draft => draft.knowledgeId)).size !== drafts.length) throw new Error('MANUAL_DRAFT_INPUT');
+  // 拦截常见写法而非猜测任意自然语言中的定位信息，剩余内容由人工核对。
+  const sourceLocation = /(?<![\w.-])[\w.-]+\.(?:[cm]?[jt]sx?|pyi?|go|rs|java|kt|kts|cs|cpp|cc|cxx|hpp|h|c|rb|php|swift|scala|sh|sql|vue|svelte)(?![\w.-])|#L\d+\b|第\s*\d+\s*行|\b(?:line|lines)\s+\d+\b/i;
+  if (sourceLocation.test(raw) || sourceLocation.test(JSON.stringify(drafts))) throw new Error('MEMORY_DRAFT_SOURCE_LOCATION');
   return drafts;
+}
+
+function renderDraft(draft, target) {
+  const operation = draft.expectedRevision === 0 ? '新增' : `更新（当前修订 ${draft.expectedRevision}）`;
+  return [
+    `## ${draft.title}`, '', `操作：${operation}`, `分类：${draft.category}`, `适用范围：${draft.scope}`,
+    `来源：${draft.source}`, `拟发布路径（本次不发布）：${target}`, '', draft.narrative,
+    ...(draft.facts.length ? ['', '### 要点', ...draft.facts.map(fact => `- ${fact}`)] : []),
+    '', '### 验证证据', ...draft.evidence.flatMap(item => [
+      '', `- ${item.publicSummary}`, `  验证：${item.implementation}`, `  对象：${item.object}`, `  方法：${item.method}`,
+      `  范围：${item.coverage}`, `  来源：${item.source}`, `  预期：${item.result.expected}`,
+      `  实际结果：${item.result.observed}`, `  比较：${item.result.comparison}`,
+    ]),
+  ].join('\n');
 }
 
 function messageText(message) {
@@ -125,7 +144,7 @@ export function installDraftCommand(pi, { readBinding, start = startManualDraft 
     }
     const project = JSON.stringify(request.binding.binding.project);
     const targets = selected.map(draft => `.project-memory/md/${draft.category}/${draft.knowledgeId}.md`);
-    const preview = `目标项目：${project}\n拟发布路径（本次不发布）：\n${targets.join('\n')}\n\n${JSON.stringify(selected, null, 2)}`;
+    const preview = `目标项目：${project}\n\n${selected.map((draft, index) => renderDraft(draft, targets[index])).join('\n\n---\n\n')}`;
     // Pi 编辑器可完整滚动预览，任何编辑或取消都不能继续确认，也不作为普通会话输入。
     const seen = await ctx.ui.editor('核对定稿（只预览，Esc 取消）', preview);
     if (seen !== preview || !stillCurrent()) return;
@@ -164,7 +183,11 @@ export function installDraftCommand(pi, { readBinding, start = startManualDraft 
     if (event.aborted || !ctx.hasUI || !current(ctx, request)) return;
     reviewing = true;
     try { await review(ctx, request, settledDraft(ctx, request)); }
-    catch { if (current(ctx, request)) ctx.ui.notify('没有可安全预览的结构化草稿，未写入。', 'warning'); }
+    catch (error) {
+      if (current(ctx, request)) ctx.ui.notify(error?.message === 'MEMORY_DRAFT_SOURCE_LOCATION' ?
+        '草稿包含源码定位（文件名、路径或行号），未写入。请去除定位信息后重新提炼。' :
+        '没有可安全预览的结构化草稿，未写入。', 'warning');
+    }
     finally { reviewing = false; }
   });
   pi.on('session_tree', reset);
