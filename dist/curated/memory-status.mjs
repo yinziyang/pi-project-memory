@@ -32,6 +32,7 @@ function privateFacts(value) {
     state: 'unknown', code,
     ...Object.fromEntries(PRIVATE_KEYS.map(key => [key, unknown(code)]))
   });
+  if (value === null) return { ...invalid('PRIVATE_NOT_ATTACHED'), state: 'missing' };
   if (!exact(value, ['version', 'state', 'code', ...PRIVATE_KEYS])) return invalid('STATUS_INPUT_INVALID');
   const { version, state, code } = value;
   if (version !== 1) return invalid('STATUS_INPUT_INVALID');
@@ -67,7 +68,7 @@ function indexFact(value) {
 export function projectMemoryStatus(input) {
   const result = {
     version: 1,
-    private: privateFacts(null),
+    private: privateFacts(undefined),
     publication: unknown('FACT_UNAVAILABLE'),
     index: unknown('FACT_UNAVAILABLE')
   };
@@ -78,13 +79,16 @@ export function projectMemoryStatus(input) {
     result.index = input.index == null ? unknown('FACT_UNAVAILABLE') : indexFact(input.index);
     return result;
   } catch {
-    return { ...result, private: privateFacts(null), publication: unknown(), index: unknown() };
+    return { ...result, private: privateFacts(undefined), publication: unknown(), index: unknown() };
   }
 }
 
 function format(snapshot) {
   const count = value => value.count === null ? `未知(${value.code})` : String(value.count);
   const p = snapshot.private;
+  if (p.state === 'missing') {
+    return `项目记忆：私有库未连接(${p.code})；当前发布=${count(snapshot.publication)}；索引=${snapshot.index.state}/${count(snapshot.index)}。`;
+  }
   return `项目记忆：私有库=${p.state}(${p.code})；归档来源=${count(p.archivedSources)}；历史批准=${count(p.approvalRecords)}；尝试=${count(p.attempts)}；结果未知尝试=${count(p.unknownAttempts)}；完整响应=${count(p.responses)}；候选记录=${count(p.candidateRecords)}；审核版本=${count(p.reviewedRevisions)}；活跃审核条目=${count(p.activeReviewedEntries)}；当前发布=${count(snapshot.publication)}；索引=${snapshot.index.state}/${count(snapshot.index)}。连接可用不等于已保存，批准历史不等于当前授权，候选不等于已审核。`;
 }
 

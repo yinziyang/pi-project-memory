@@ -198,7 +198,7 @@ export default function curatedMemoryExtension(pi) {
       if (!ctx.isProjectTrusted()) throw unavailable('PROJECT_NOT_TRUSTED');
       stage = 'descriptor';
       const selected = await observation(ctx.cwd, 'publication');
-      if (!selected) { absent = true; throw unavailable(); }
+      if (!selected) { absent = true; return; }
       diagnosticEnabled = true;
       const indexConfig = await observation(ctx.cwd, 'indexConfig');
       if (indexConfig && (indexConfig.project !== selected.project || indexConfig.cwd !== selected.canonicalCwd)) throw unavailable('INDEX_BINDING_INVALID');
@@ -275,10 +275,11 @@ export default function curatedMemoryExtension(pi) {
       let failed = false;
       try { await task; } catch (error) {
         failed = true;
-        // 全 OFF 且没有公开描述是正常未配置状态，不因此创建 HOME 诊断目录。
-        if (!absent) recordOwnerFault({ operation, stage, error, bridge: bridgeDiagnostics(reader) });
+        recordOwnerFault({ operation, stage, error, bridge: bridgeDiagnostics(reader) });
       }
-      if (!absent && diagnosticEnabled) {
+      // 没有公开描述是正常未配置状态，不写诊断，也不报告成功加载了发布。
+      if (absent) return 'missing';
+      if (diagnosticEnabled) {
         try { await flushOwnerDiagnostics(operation); } catch {
           if (ticket === revision) {
             revokeReader();
@@ -288,7 +289,7 @@ export default function curatedMemoryExtension(pi) {
         }
       }
       if (failed) {
-        if (ctx.hasUI) ctx.ui.notify('项目记忆不可用或尚未配置。', 'warning');
+        if (ctx.hasUI) ctx.ui.notify('无法读取当前项目的公开记忆。', 'warning');
         throw unavailable();
       }
     })();
@@ -420,6 +421,9 @@ export default function curatedMemoryExtension(pi) {
       if (indexInstall) throw unavailable('INDEX_INSTALL_BUSY');
       const selected = startIndexInstall(process.env.HOME);
       indexInstall = selected;
+      try {
+        if (ctx.hasUI) ctx.ui.notify('正在初始化本地语义搜索。首次安装需要下载约 470 MB 的 E5 权重并安装 Chroma，请等待完成或错误提示。', 'info');
+      } catch { /* 通知失败不能跳过已经启动的安装任务及其结果。 */ }
       const code = await selected.result;
       if (code !== 'INDEX_INSTALL_CLOSE_UNCONFIRMED') indexInstall = undefined;
       if (code !== 'INDEX_INSTALL_READY') throw unavailable(code);
@@ -448,9 +452,10 @@ export default function curatedMemoryExtension(pi) {
         return;
       }
       if (action !== '' && action !== 'pause') throw unavailable();
-      try { await lifecycle(ctx, false, action === 'pause'); }
+      let outcome;
+      try { outcome = await lifecycle(ctx, false, action === 'pause'); }
       finally { if (action === 'pause') { statusRequested = undefined; memoryStatus.clear(ctx); } else queueStatus(ctx); }
-      if (ctx.hasUI) ctx.ui.notify(action === 'pause' ? '项目记忆已停服并回收。' : '项目公开记忆已重新安装。', 'info');
+      if (ctx.hasUI) ctx.ui.notify(action === 'pause' ? '项目记忆已停服并回收。' : outcome === 'missing' ? '当前项目尚未发布公开记忆。' : '项目公开记忆已重新安装。', 'info');
     }
   });
 }
