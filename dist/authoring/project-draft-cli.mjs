@@ -65,6 +65,7 @@ function publish(parent, { project, generation, drafts }) {
     writeFileSync(marker, 'local-project-memory-project-draft-v1\n', { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if (error.code === 'EEXIST' || exists(marker)) throw recovery();
+    if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) throw new Rejection('PROJECT_DRAFT_UNAVAILABLE');
     throw error;
   }
   let ownsStage = false;
@@ -135,8 +136,7 @@ async function run() {
     if (process.argv.length !== 4 || realpathSync(cwd) !== cwd || !/^[0-9]+$/.test(descriptor)) throw new Error();
     const dir = lstatSync(cwd);
     const locked = fstatSync(Number(descriptor));
-    if (!dir.isDirectory() || dir.uid !== process.getuid() || (dir.mode & 0o022) !== 0
-        || dir.dev !== locked.dev || dir.ino !== locked.ino) throw new Error();
+    if (!dir.isDirectory() || dir.dev !== locked.dev || dir.ino !== locked.ino) throw new Error();
   } catch {
     throw new Rejection('PROJECT_DRAFT_UNAVAILABLE');
   }

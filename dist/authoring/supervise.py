@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import select
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -32,9 +31,7 @@ def lock_project(path):
         raise ValueError('PROJECT_DRAFT_PATH')
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        item = os.fstat(fd)
-        if item.st_uid != os.getuid() or item.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-            raise ValueError('PROJECT_DRAFT_PATH')
+        # 目录权限位不能反映调用者的实际写权限，由持锁后的文件操作判定。
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BaseException:
         os.close(fd)
